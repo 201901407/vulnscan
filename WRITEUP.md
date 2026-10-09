@@ -1,4 +1,4 @@
-# Astra take-home: design and results
+# Assignment Writeup
 
 On InsecureShop, general lessons written by a frontier model raised a small open model's recall from 54.4% to 75.4%. This was measured over three runs per arm against the 19 vulnerabilities documented in the InsecureShop README.
 
@@ -48,40 +48,39 @@ Nothing in the code is specific to InsecureShop. Models, app path and thresholds
 
 ### Why root cause, and not a field
 
-A match rule needs something to compare. Each candidate field fails alone:
+No single field can decide a match:
 
-| Field | Why it cannot decide alone |
+| Field | Why it fails alone |
 | --- | --- |
-| Type or category | Labels are noisy. Models name the same bug differently, and one bug can fairly carry several labels |
+| Type or category | Models name the same bug differently, and one bug can fairly carry several labels |
 | Location | One class can hold several bugs, and one bug can span several classes |
 | Text | The same bug is described in different words |
 
-Each field is partial evidence about the root cause. The match function therefore gives all of them to a judge and lets no single one accept or reject a pair.
+Each field is partial evidence about the root cause, so all of them go to a judge and none can accept or reject a pair alone.
 
 ### Input: one shape for both sides
 
-Model findings and reference entries are loaded into the same schema, so the matcher never needs to know where either side came from.
+Model findings and reference entries are loaded into the same schema, so the matcher does not need to know where either side came from.
 
 | Field | Model finding | Reference entry | Notes |
 | --- | --- | --- | --- |
-| `id` | Set by code (`F1`, `F2`, ...) | Set by code (`R1`, `R2`, ...) | Never produced by a model |
-| `title` | Required | Required | One line |
-| `description` | Required | Required | Why it is exploitable |
-| `category` | Required | Optional | One OWASP MASVS group, or `other`. An unknown value is rewritten to `other` |
+| `id` | `F1`, `F2`, ... | `R1`, `R2`, ... | Set by code, never by a model |
+| `title`, `description` | Required | Required | |
+| `category` | Required | Optional | An OWASP MASVS group or `other`; unknown values become `other` |
 | `type` | Required | Optional | Short free-text name of the weakness |
-| `severity` | Required | Optional | `critical`, `high`, `medium`, `low` or `info` |
+| `severity` | Required | Optional | `critical` to `info` |
 | `locations` | Required | Optional | List of `{file, symbol, line}` |
 | `evidence` | Required | Optional | Code quoted from the app |
-| `cwe` | Optional | Optional | Format-checked only (`CWE-<n>`) |
+| `cwe` | Optional | Optional | Format-checked only |
 
-The InsecureShop README gives one line per vulnerability, so its 19 reference entries carry only `title` and `description`. A model finding that lacks a required field is dropped as malformed and counted in the report.
+InsecureShop's README gives one line per vulnerability, so its 19 entries carry only a title and a description. A model finding missing a required field is dropped and counted.
 
 ### Algorithm
 
-1. **Filter.** Only findings that passed the evidence check are scored. A finding whose quoted code is not in the app is excluded before matching.
-2. **Batch.** Findings are sent to the judge in batches of 20 (a config value), each batch together with the full reference list.
-3. **Judge.** For every finding in the batch, the judge returns the one reference entry with the same root cause, or `null`, plus a one-line reason. It is given every field except internal bookkeeping; in particular it cannot see which arm (with or without lessons) a finding came from.
-4. **Validate.** Code checks the reply. A finding with no answer, or an answer naming an entry that does not exist, is treated as unassigned and counted. An unparseable reply is retried once.
+1. **Filter.** Only findings that passed the evidence check are scored.
+2. **Batch.** Findings go to the judge 20 at a time (a config value), each batch with the full reference list.
+3. **Judge.** For each finding the judge returns the one entry with the same root cause, or `null`, with a one-line reason. It sees every field except bookkeeping, so it cannot tell which arm a finding came from. Its instructions state the test: weigh all fields together, different wording does not prevent a match, and the same category or file does not make one.
+4. **Validate.** A finding with no answer, or an answer naming a non-existent entry, is treated as unassigned and counted. An unparseable reply is retried once.
 5. **Score.**
 
 ```
@@ -89,35 +88,23 @@ recall    = reference entries with at least one finding assigned / all reference
 precision = findings assigned to an entry / findings judged
 ```
 
-The judge's instructions state the test directly: share a root cause, weigh every field together, different wording does not prevent a match, and the same category or file does not make one.
-
-The judge's reply has this shape:
+The judge's reply:
 
 ```json
 {"assignments": [
-  {"finding_id": "F12", "reference_id": "R5", "reason": "Both describe an embedded intent passed to startActivity without validation."},
-  {"finding_id": "F2",  "reference_id": null, "reason": "No reference entry covers a debuggable build."}
+  {"finding_id": "F12", "reference_id": "R5", "reason": "Both pass an embedded intent to startActivity unchecked."},
+  {"finding_id": "F2",  "reference_id": null, "reason": "No entry covers a debuggable build."}
 ]}
 ```
 
-A real pair from the reported run, to show what the judge decides:
+An example from the reported run: the student's "Intent redirection via nested Intent extra" in `WebView2Activity.java` was matched to the entry "Access to Protected Components", which names no location. The titles differ and there is no shared location field, but the root cause is the same.
 
-| | Student finding | Reference entry R5 |
-| --- | --- | --- |
-| Title | Intent redirection via nested Intent extra | Access to Protected Components |
-| Location | `WebView2Activity.java` | Not given |
-| Evidence or description | `getParcelableExtra("extra_intent")` passed to `startActivity` | "The app takes an embedded Intent and passes it to method like startActivity" |
+Code enforces four properties around the judge:
 
-Different titles, no shared location field, same root cause: the judge matched them.
-
-### Properties that code enforces
-
-- **One entry per finding.** A finding maps to at most one entry, so a vague finding cannot claim several.
-- **Duplicates count once.** Several findings on the same entry add one to recall.
-- **The judge is never the student.** Config validation rejects a run where the judge is listed as a student.
-- **One judge per comparison.** The same judge model and prompt score every run being compared.
-- **Auditable.** Each scan's assignments and reasons are saved as `<scan>.match.json`.
-- **No ground truth needed.** Without a reference file, the teacher's verified findings become the reference, and the report labels recall as agreement with the teacher.
+- **One entry per finding**, so a vague finding cannot claim several, and several findings on one entry count once.
+- **The judge is never a student**, and the same judge and prompt score every run being compared.
+- **Every assignment is saved** with its reason, as `<scan>.match.json`.
+- **No ground truth is needed.** Without a reference file, the teacher's verified findings become the reference, and the report labels recall as agreement with the teacher.
 
 ### Rejected alternatives
 
@@ -125,7 +112,7 @@ Different titles, no shared location field, same root cause: the judge matched t
 | --- | --- |
 | Rules on type and location | One field would decide, and a prose reference list has neither |
 | Embedding similarity | Ignores location, and needs a threshold tuned on one app |
-| Rules that discard pairs first, judge decides the rest | Considered and deferred. A single noisy field could still discard a true match, and at this size the judge can read everything. It becomes necessary when the reference list no longer fits in one prompt |
+| Rules discard pairs first, judge decides the rest | Deferred. One noisy field could still discard a true match. It becomes necessary when the reference list no longer fits in one prompt |
 
 ### How well the judge did
 
@@ -138,12 +125,9 @@ A model grading models is the weak point, so a second model with access to the a
 | Student with lessons | 69 | 9 |
 | **Total** | **133** | **26 (agreement 80.5%)** |
 
-Every assignment behind the four gained vulnerabilities was confirmed. The disagreements were of two kinds:
+Every assignment behind the four gained vulnerabilities was confirmed. The disagreements were of two kinds: a finding credited to an entry for a similar bug in a different component, and a finding placed on the wrong one of several entries that all describe loading an arbitrary URL in a WebView. Both trace to a reference list whose one-line entries name no class.
 
-- **Same pattern, different component.** For example, a finding about a provider class that the manifest never registers was credited to the entry for the real exported provider.
-- **Right bug, wrong entry.** Several entries describe "load an arbitrary URL in a WebView" in different activities, and the judge often picked the wrong one of them.
-
-Both trace to the reference list: one-line entries that name no class give the judge nothing to separate similar bugs with. Applying the audit's corrections lowers baseline recall to 43.9% and raises the lift to 31.6 points. The judge's 21.1 points is reported as the result because it is the smaller figure and comes from the pipeline as designed.
+With the audit's corrections, baseline recall falls to 43.9% and the lift rises to 31.6 points. The judge's 21.1 points is reported because it is the smaller figure and comes from the pipeline as designed.
 
 ## 4. Models used and why
 
@@ -157,84 +141,85 @@ Any of the three can be swapped in the config file.
 
 ## 5. A real app with 1M+ lines of code
 
-What the tool does today:
+The tool reads every file of the app's own code and splits the files across calls by size. That is sound for a small app and wrong for a large one.
 
-- Sends only the app's own code. Library code is dropped and dependencies are passed by name.
-- Strips build-generated files and unreadable compiler metadata.
-- Splits the code across several calls when it exceeds a model's input limit, with the manifest in each call.
-- Gives each call only the lessons relevant to the code in it.
-- Saves each stage, so a long run can stop and resume.
+### What the tool does today
 
-The known limit is that splitting by file can miss a bug that spans files in different calls.
+Ingest cuts the input down before any model sees it: library code is dropped and dependencies are passed by name, and build-generated files and unreadable compiler metadata are stripped. If the remaining code exceeds a model's input limit, whole files are packed into as many calls as needed, with the manifest in each. Each call gets only the lessons whose signals appear in its files, and every stage is saved so a long run can resume.
 
-What I would add at that scale:
+### Why this stops working
 
-1. Rank code by attack surface, starting from the entry points the manifest declares.
-2. Follow call paths from those entry points instead of reading every file.
-3. Run a cheap pattern pre-filter, so only suspicious code reaches the model.
-4. Summarise modules first, then send the risky ones in full.
-5. Merge duplicate findings across calls.
-6. Cache results by file hash, so unchanged code is not scanned again.
+Splitting by file treats all code as equally worth reading. At scale that fails in two ways:
+
+- **Most of the budget goes to code no attacker can reach.** A large app has a few hundred places where outside data enters and a great deal of internal code behind them.
+- **Bugs get cut in half.** A vulnerability is usually a path: untrusted data enters in one place and reaches a dangerous call in another. When the two ends land in different calls, no call contains the bug.
+
+### What I would do instead
+
+1. **Start from the attack surface.** That is every place attacker-controlled data can enter: exported components, deep links, content providers and WebView bridges, most of them declared in the manifest. Code is ranked by how close it sits to one of these, and scanned in that order.
+2. **Follow the data, not the file listing.** A call graph from each entry point gives the paths from untrusted input to sensitive calls. The path replaces the file as the unit of analysis, which keeps both ends of a bug together.
+3. **Use a funnel.** A cheap static pass (pattern rules or taint tracking) proposes candidate paths across the whole codebase, and the model judges only those. Pipelines built on CodeQL or Semgrep work this way.
+4. **Let the model fetch its own context.** Give it tools to search, open a definition and list callers, so it pulls in what each candidate needs. Agent-based systems such as Google's Big Sleep do this, and it removes the chunking problem instead of tuning it.
+5. **Analyse once, reuse.** Summarise each module once and consult the summary before opening the code, as Meta's Infer and Mariana Trench do with function summaries.
+6. **Scan only what changed.** Cache results by file hash, so a new version costs only its differences.
+
+Duplicate findings from overlapping paths would also need merging. None of this is built: the assignment asks for a working slice, and these matter only at a scale the test apps do not reach.
 
 ## 6. Dynamic analysis
 
-One bug type that dynamic analysis catches and static analysis cannot: a flaw in the backend's behaviour. The APK contains no backend code, so such a flaw only shows when the app runs against a live server. A typical example is broken authorization, where an API returns another user's order when the ID in the request is changed. Dynamic analysis reaches these flaws as long as they show up in what the server returns or does.
+Static analysis reads the app; it never sees the server. So one bug type it cannot catch is a flaw in the backend's behaviour, such as broken authorization, where an API returns another user's order when the ID in the request is changed. The APK contains no backend code, and the flaw shows only when the app runs against a live server.
 
-**How the system extends.** The static pipeline's findings become hypotheses for an agent to test on a running app. The finding shape, the evidence rule and the matching stay the same. Evidence becomes a runtime observation instead of quoted code.
+### Proposed design
 
-**Confirming a vulnerability.** A crash only shows that something broke. The agent needs an oracle for each bug class: an observable effect that can only happen if the bug is real. I would plant canaries, which are unique markers placed in a private file and in a second test account's data, and watch where they appear: in intercepted traffic, in shared storage, in the log, or in a helper "attacker" app installed on the same device. For the authorization example, account A's session fetching account B's canary is the proof. A finding is confirmed only when it reproduces from a clean state.
+The static pipeline's findings become hypotheses, and an agent tests each one on a running app. Four parts do the work:
 
-**Reaching the right screen.** The agent reads the screen through the accessibility tree and acts by tapping and typing, with seeded test accounts for login. It should not tap its way everywhere. The manifest and the static findings name the entry points, so exported components and deep links can be launched directly with a crafted intent. Coverage is measured against what static analysis says exists: the share of declared activities reached, and the share of API endpoints found in the code that were seen in traffic.
+- **An agent** that plans the steps for a hypothesis and drives the app.
+- **A disposable emulator** running the target app next to a helper "attacker" app.
+- **A proxy** between the app and the live backend, so the agent can read the traffic.
+- **An oracle** that decides whether what was observed proves the bug.
 
-**Scale.** Each run starts from a snapshot of an emulator with the app installed, the proxy certificate trusted and the accounts seeded. The emulator is discarded afterwards, so no state leaks between runs. Runs are independent jobs on a pool of workers, each with a time limit. A flaky run is retried, and each step's result is saved so that a retry repeats only what failed.
-
-**SSL pinning.** Traffic goes through an intercepting proxy whose certificate the emulator trusts. Pinning is bypassed by hooking the app's certificate checks at runtime, or by repackaging the app with pinning removed. The things most likely to break:
-
-- Pinning done in native code or in a non-standard network stack, which generic hooks miss.
-- Tamper, root or hook detection that makes the app refuse to run.
-- Traffic that never reaches the proxy, such as protocols that ignore the system proxy setting.
-
-When a bypass fails, the run should report that traffic was not visible, not that nothing was found.
-
-### Architecture
+A confirmed finding has the same shape as a static one, with a runtime observation as its evidence, so matching and reporting are reused unchanged.
 
 ```
-+---------------------------+        +-------------------------------+
-|  Static pipeline          |        |  Agent                        |
-|  findings = hypotheses    | -----> |  plans steps, picks an oracle |
-|  entry points from the    |        |  for each hypothesis          |
-|  manifest                 |        +-------------------------------+
-+---------------------------+              |                  ^
-                                           | taps, text,      | screen tree,
-                                           | crafted intents  | traffic, logs,
-                                           v                  | files
-+----------------------------------------------------------------------+
-|  One disposable worker                                               |
-|                                                                      |
-|   Emulator restored from a snapshot                                  |
-|     - target app, with pinning bypassed                              |
-|     - helper "attacker" app                                          |
-|     - seeded test accounts and canary data                           |
-|              |                                                       |
-|              | all app traffic                                       |
-|              v                                                       |
-|   Intercepting proxy  <---------->  Live backend (test accounts)     |
-+----------------------------------------------------------------------+
-                                           |
-                                           v
-                      +--------------------------------------+
-                      |  Oracles                             |
-                      |  did a canary appear where it        |
-                      |  should not?                         |
-                      +--------------------------------------+
-                                           |
-                                           v
-                      +--------------------------------------+
-                      |  Confirmed findings, in the same     |
-                      |  shape as static findings            |
-                      |  -> matching and report              |
-                      +--------------------------------------+
+  Static findings            the hypotheses to test
+        |
+        v
+  +-----------+   taps, text, intents   +---------------------------+
+  |           | ----------------------> |  Emulator, fresh per run  |
+  |   Agent   |                         |  target app + helper app  |
+  |           | <---------------------- |                           |
+  +-----------+   screen, logs, files   +---------------------------+
+        |    ^                                        |
+        |    |                                        | all app traffic
+        |    |                                        v
+        |    |      captured traffic            +-----------+     +---------+
+        |    +--------------------------------- |   Proxy   | <-> | Backend |
+        v                                       +-----------+     +---------+
+  +-----------+
+  |  Oracle   |   did the planted marker appear where it should not?
+  +-----------+
+        |
+        v
+  Confirmed findings         same shape as static findings; then matched
+                             and reported
 ```
+
+### How each part works
+
+**The oracle: proof, not crashes.** A crash only tells us something broke, not that it was exploitable. The oracle looks for proof in two ways. One is a known signal for each bug type, such as credentials showing up in the logs. The other is planted evidence: the agent pushes dummy data carrying a unique marker through the suspect flow, then checks where the marker turns up. If account A can fetch a marker that belongs to account B, the bug is real. It counts only if it happens again from a clean start.
+
+**The agent: reaching the right screen.** The agent navigates much as a web agent uses the DOM: it reads the screen's element tree, picks an element, and taps or types, logging in with seeded test accounts. It does not tap its way everywhere. The manifest and the static findings name the entry points, so exported components and deep links are launched directly with a crafted intent. Coverage is measured against what static analysis found: the share of declared activities reached, and the share of API endpoints in the code that appeared in traffic.
+
+**The emulator: disposable at scale.** A device is treated like a server instance, never as a machine to look after. A golden image is built once, with the app installed, the proxy certificate trusted and the accounts seeded, and is snapshotted after boot. Each run starts from that snapshot in seconds, on a copy-on-write overlay that is deleted afterwards, so nothing is ever cleaned and no state carries over. Server-grade virtual devices such as Google's Cuttlefish run headless on hosts whose CPU matches the app's architecture, which avoids slow instruction translation. Runs are hermetic and time-limited; an infrastructure failure is retried automatically, while a finding must reproduce on a fresh device. Each hypothesis is one job on a queue, and only what static analysis flagged is run at all.
+
+**The proxy: seeing traffic despite SSL pinning.** The emulator trusts the proxy's certificate. Where the app pins its own certificate, the pinning is bypassed by hooking the app's certificate checks at runtime, or by repackaging the app with pinning removed.
+
+### Limitations
+
+- **Pinning bypass is the most fragile part.** It breaks on pinning done in native code or a non-standard network stack, on tamper, root or hook detection that makes the app refuse to run, and on traffic that never reaches the proxy. When it fails, the run must report that traffic was not visible, not that nothing was found.
+- **Some screens expose no element tree.** Custom-drawn interfaces leave the agent with screenshots only.
+- **Some apps refuse to run on an emulator.** These need a small pool of real devices.
+- **Only observable backend flaws are reachable.** A flaw that never shows in what the server returns or does stays hidden.
 
 ## 7. A second app
 
