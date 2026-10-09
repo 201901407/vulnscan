@@ -167,18 +167,13 @@ Duplicate findings from overlapping paths would also need merging. None of this 
 
 ## 6. Dynamic analysis
 
-Static analysis reads the app; it never sees the server. So one bug type it cannot catch is a flaw in the backend's behaviour, such as broken authorization, where an API returns another user's order when the ID in the request is changed. The APK contains no backend code, and the flaw shows only when the app runs against a live server.
+Everything I built reads the app without running it, so it never sees the server. That misses a whole class of bugs. The clearest example is broken authorization: an API hands back someone else's order when you change the ID in the request. The APK holds no backend code, so a flaw like this only shows when the app runs against a live server.
 
-### Proposed design
+### What I'd build
 
-The static pipeline's findings become hypotheses, and an agent tests each one on a running app. Four parts do the work:
+I would keep the static pipeline and treat its findings as hypotheses to test. An agent picks one, works out the steps, and drives the app in an emulator. A second app on the same emulator, the helper app in the diagram below, plays the attacker, because many Android bugs are one app attacking another. The app's traffic passes through a proxy on its way to the real backend, so the agent can read it. Finally an oracle decides whether the bug actually happened.
 
-- **An agent** that plans the steps for a hypothesis and drives the app.
-- **A disposable emulator** running the target app next to a helper "attacker" app.
-- **A proxy** between the app and the live backend, so the agent can read the traffic.
-- **An oracle** that decides whether what was observed proves the bug.
-
-A confirmed finding has the same shape as a static one, with a runtime observation as its evidence, so matching and reporting are reused unchanged.
+A confirmed finding has the same shape as a static one, with a runtime observation as its evidence in place of quoted code. That means the matching and the report are reused as they are.
 
 ```
   Static findings            the hypotheses to test
@@ -204,22 +199,21 @@ A confirmed finding has the same shape as a static one, with a runtime observati
                              and reported
 ```
 
-### How each part works
+### How it works
 
-**The oracle: proof, not crashes.** A crash only tells us something broke, not that it was exploitable. The oracle looks for proof in two ways. One is a known signal for each bug type, such as credentials showing up in the logs. The other is planted evidence: the agent pushes dummy data carrying a unique marker through the suspect flow, then checks where the marker turns up. If account A can fetch a marker that belongs to account B, the bug is real. It counts only if it happens again from a clean start.
+**Knowing a bug is real.** A crash shows that something broke, not that it can be exploited, so I would not count a crash as a finding. Some bug types have a known signal to look for, such as credentials appearing in the logs. For the rest, the agent plants its own evidence: it sends dummy data carrying a unique marker through the flow it suspects, then looks for where that marker lands. If account A can fetch a marker that belongs to account B, the authorization bug is real. I would accept a finding only if it repeats from a clean start.
 
-**The agent: reaching the right screen.** The agent navigates much as a web agent uses the DOM: it reads the screen's element tree, picks an element, and taps or types, logging in with seeded test accounts. It does not tap its way everywhere. The manifest and the static findings name the entry points, so exported components and deep links are launched directly with a crafted intent. Coverage is measured against what static analysis found: the share of declared activities reached, and the share of API endpoints in the code that appeared in traffic.
+**Getting to the right screen.** The agent navigates much as a web agent uses the DOM. It reads the tree of elements on screen, picks one, and taps or types, logging in with test accounts seeded in advance. Tapping through every screen is slow and unreliable, though. The manifest and the static findings already name the entry points, so where it can, the agent opens an exported screen or a deep link directly with a crafted intent. For coverage I would compare against what static analysis found: how many declared activities were reached, and how many of the API endpoints in the code showed up in traffic.
 
-**The emulator: disposable at scale.** A device is treated like a server instance, never as a machine to look after. A golden image is built once, with the app installed, the proxy certificate trusted and the accounts seeded, and is snapshotted after boot. Each run starts from that snapshot in seconds, on a copy-on-write overlay that is deleted afterwards, so nothing is ever cleaned and no state carries over. Server-grade virtual devices such as Google's Cuttlefish run headless on hosts whose CPU matches the app's architecture, which avoids slow instruction translation. Runs are hermetic and time-limited; an infrastructure failure is retried automatically, while a finding must reproduce on a fresh device. Each hypothesis is one job on a queue, and only what static analysis flagged is run at all.
+**Running it at scale.** A device should be thrown away after every run, like a server instance, and never cleaned. I would build one golden image with the app installed, the proxy certificate trusted and the test accounts seeded, and snapshot it after boot. Each run starts from that snapshot in seconds, on a copy-on-write layer that is deleted afterwards, so there is nothing to reset and no state to leak into the next run. For speed I would use virtual devices made for servers, such as Google's Cuttlefish, on hosts with the same CPU architecture as the app, because translating instructions is what makes emulators slow. Flakiness I would plan for: every step has a time limit, an infrastructure failure is retried automatically, and a finding has to reappear on a fresh device. Each hypothesis is one job on a queue. And only what static analysis flagged is run in the first place.
 
-**The proxy: seeing traffic despite SSL pinning.** The emulator trusts the proxy's certificate. Where the app pins its own certificate, the pinning is bypassed by hooking the app's certificate checks at runtime, or by repackaging the app with pinning removed.
+**Seeing the traffic.** The emulator is set up to trust the proxy's certificate. An app that pins its own certificate will still refuse the connection, so the pinning has to be disabled, either by hooking the app's certificate checks at runtime or by repackaging the app without them.
 
-### Limitations
+### Where it is weak
 
-- **Pinning bypass is the most fragile part.** It breaks on pinning done in native code or a non-standard network stack, on tamper, root or hook detection that makes the app refuse to run, and on traffic that never reaches the proxy. When it fails, the run must report that traffic was not visible, not that nothing was found.
-- **Some screens expose no element tree.** Custom-drawn interfaces leave the agent with screenshots only.
-- **Some apps refuse to run on an emulator.** These need a small pool of real devices.
-- **Only observable backend flaws are reachable.** A flaw that never shows in what the server returns or does stays hidden.
+Pinning is the part I expect to break most often, in three ways. Generic hooks miss pinning done in native code or in an unusual network stack. Some apps detect tampering, root or the hooks themselves and refuse to start. And some traffic never reaches the proxy at all. When any of these happens, the run must report that it could not see the traffic. Reporting "nothing found" would be wrong.
+
+Three other limits are worth stating. Screens that draw their own interface expose no element tree, which leaves the agent with screenshots only. Some apps will not run on an emulator, so a few real devices are needed for those. And a backend flaw can be caught only if it shows in what the server returns or does.
 
 ## 7. A second app
 
