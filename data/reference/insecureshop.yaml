@@ -1,0 +1,42 @@
+# Vulnerability list for InsecureShop, used as the reference for scoring.
+# Converted by rule from the "Vulnerabilities" section of the project's README:
+# https://github.com/hax0rgb/InsecureShop
+# The wording is the authors'. InsecureShop is MIT licensed, Copyright (c) 2021 Optiv Security.
+- title: Hardcoded Credentials
+  description: Credentials are hardcoded somewhere that can be used to login to the application
+- title: Insufficient URL Validation
+  description: Possible to load any arbitrary URL in webview via Deeplink.
+- title: Weak Host Validation Check
+  description: Possible to bypass host validation check to load any arbitrary URL in webview.
+- title: Arbitrary Code Execution
+  description: Arbitrary Code Execution via third-party package contexts.
+- title: Access to Protected Components
+  description: The app takes an embedded Intent and passes it to method like startActivity. This allows any third party app to launch any protected component.
+- title: Unprotected Data URIs
+  description: The untrusted URI's passed via loadUrl method allows attackers to pass arbitrary URL in webview.
+- title: Theft of Arbitrary
+  description: Possible to steal files from app's local storage via ChooserActivity.
+- title: Using Components with Known Vulnerabilities
+  description: Identify the vulnerable components or libraries used in the app that can allow you to exfiltrate local files to remote domain.
+- title: Insecure Broadcast Receiver
+  description: An exported activity registers a broadcast during onCreate method execution. An attacker can trigger this broadcast and provide arbitrary URL in 'web_url' parameter.
+- title: AWS Cognito Misconfiguration
+  description: The misconfigured AWS cognito instance can be used to accesss AWS S3 bucket.
+- title: Insecure use of FilePaths in FileProvider
+  description: The use of wide file sharing declaration can be used to access root directory via content Provider.
+- title: Use of Implicit intent to send a broadcast with sensitive data
+  description: The use of Implicit intent can allow third-party apps to steal credentials.
+- title: Intercepting Implicit intent to load arbitrary URL
+  description: The use of Implicit intent can allow third-party apps to load any arbitrary URL in webview.
+- title: Insecure Implementation of SetResult in exported Activity
+  description: The insecure implementation used in ResultActivity can be used to access arbitrary content providers.
+- title: Insecure Content Provider
+  description: The content provider can be accessed by any third-party app to steal user credentials.
+- title: Lack of SSL Certificate Validation
+  description: The unsafe implementation of OnReceived SSL Error can be used to eavesdrop all the traffic loaded in webview.
+- title: Insecure Webview Properties Enabled
+  description: Insecure Webview properties are enabled that can allow third-party apps to exfiltrate local data to remote domain.
+- title: Insecure Data Storage
+  description: The app stores user credentials locally without encrypting them.
+- title: Insecure Logging
+  description: User credentials are leaked in logcat. Only attackers with physical access to the device can access this information.

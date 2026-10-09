@@ -1,0 +1,42 @@
+app:
+  path: path/to/app.apk      # an APK, or a decompiled or source folder
+  reference: null            # YAML list of known vulnerabilities; null scores students against the teacher
+
+# Any model LiteLLM can reach, written as provider/model.
+# Keys are read from the environment variable named by api_key_env, never from this file.
+models:
+  teacher:
+    model: PROVIDER/MODEL                # e.g. anthropic/<model>, openai/<model>, gemini/<model>
+    api_key_env: TEACHER_API_KEY         # e.g. ANTHROPIC_API_KEY
+    input_budget_tokens: 150000          # how much prompt one call may carry
+    max_output_tokens: 32000             # includes reasoning tokens, where a model has them
+  judge:
+    model: PROVIDER/MODEL                # a strong model; it must not be one of the students
+    api_key_env: JUDGE_API_KEY
+    max_output_tokens: 16000
+  student:
+    model: PROVIDER/MODEL                # an open model, e.g. groq/openai/gpt-oss-20b
+    api_key_env: STUDENT_API_KEY         # e.g. GROQ_API_KEY
+    input_budget_tokens: 6000            # keep input + output under the provider's tokens-per-minute limit
+    max_output_tokens: 3000
+    # temperature: 0.2                   # default 0.2; set per model if a provider requires another value
+    # extra: {reasoning_effort: low}     # any extra provider parameters
+    # adapter: manual                    # no API: the prompt is written to a file and you save the reply
+
+roles:
+  teacher: teacher
+  students: [student]        # a list; add more model names to compare students
+  judge: judge               # must not be a student
+
+scan:
+  repeats: 3                 # runs per student arm
+
+evidence:
+  check: exclude             # off | flag | exclude
+  min_match: 0.5             # share of quoted lines that must exist in the app
+
+# match:
+#   judge_temperature: 0     # default 0; raise it only if the judge's provider requires
+
+# Everything else (ingest patterns, categories, batch sizes, retry limits)
+# has defaults in src/vulnscan/config.py and can be overridden here.

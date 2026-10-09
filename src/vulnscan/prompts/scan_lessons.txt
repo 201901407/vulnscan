@@ -1,0 +1,6 @@
+
+<lessons>
+These are general vulnerability patterns to check for. They are guidance, not findings. Report a pattern only where the code below actually contains it.
+
+{{lessons}}
+</lessons>
